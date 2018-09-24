@@ -17,6 +17,12 @@
           [(pred? (car xs)) (cons (car xs) (filter pred? (cdr xs)))]
           [else (filter (cdr xs))])))
 
+(define last
+  (lambda (xs)
+    (cond [(null? xs) (eopl:error `last " apply to empty list")]
+          [(null? (cdr xs)) (car xs)]
+          [else (last (cdr xs))])))
+
 ;; Define datatype Environment
 (define-datatype environment environment?
   (empty-env)
@@ -69,6 +75,8 @@
 
 (define value-of-program
   (lambda (pgm)
+    ;; infinity memory store
+    (initialize-store!)
     (cases program pgm
       (a-program (exp1) (value-of exp1 (init-env))))))
 
@@ -77,12 +85,63 @@
                         value-of-program
                         (sllgen:make-stream-parser scanner grammar)))
 
+;; store
+(define empty-store
+  (lambda () '()))
+
+;; a scheme variable containing the current state of the store. Initially set to a dummy value.
+(define the-store 'uninitialized)
+
+;; get-store :: () -> Sto
+(define get-store
+  (lambda () the-store))
+
+;; initialize-store! :: () -> Unspecified
+(define initialize-store!
+  (lambda () (set! the-store (empty-store))))
+
+;; reference? :: SchemeVal -> Bool
+(define reference? ; i.e. memory address
+  (lambda (v) (number? v)))
+
+;; newref :: ExpVal -> Ref
+(define newref             
+  (lambda (val)
+    (let ([next-ref (length the-store)])
+      ; extend current memory, append a new ref, return its address
+      (set! the-store (append the-store (list val)))
+      ; DEBUG (eopl:printf "next-ref ~s\n" next-ref)
+      next-ref)))
+
+;; deref :: Ref -> ExpVal
+(define deref    
+  (lambda (ref)
+    ; list-ref :: List of a * Int -> a
+    (list-ref the-store ref)))
+
+;; setref! :: Ref * Expval -> Unspecified
+(define setref!
+  (lambda (ref val)
+    (set! the-store ;; global variable `the-store
+          (letrec ([setref-inner (lambda (store1 ref1)
+                                   (cond [(null? store1) (report-invalid-reference ref the-store)]
+                                         [(zero? ref1) (cons val (cdr store1))]
+                                         [else (cons (car store1)
+                                                     (setref-inner (cdr store1) (- ref1 1)))]))])
+            (setref-inner the-store ref)))))
+
+(define report-invalid-reference
+  (lambda (ref store)
+    (eopl:error 'setref! "address ~s beyond memory ~s" ref store)))
+
+
 ; Expression value representation
 (define-datatype expval expval?
   (num-val (num number?))
   (bool-val (bool boolean?))
   (proc-val (proc proc?))
-  (list-val (lst (list-of expval?))))
+  (list-val (lst (list-of expval?)))
+  (ref-val (ref reference?)))
 
 (define expval->num
   (lambda (val)
@@ -107,6 +166,12 @@
     (cases expval val
       (list-val (lst) lst)
       (else (report-expval-extractor-error 'list val)))))
+
+(define expval->ref
+  (lambda (val)
+    (cases expval val
+      (ref-val (ref) ref)
+      (else (report-expval-extractor-error 'ref val)))))
 
 (define-datatype proc proc?
   (procedure
@@ -185,7 +250,11 @@ Expression ::= let {identifier = Expression}* in Expression
   (letrec-exp (p-names (list-of identifier?))
               (b-vars (list-of (list-of identifier?)))
               (p-bodies (list-of expression?))
-              (letrec-body expression?)))
+              (letrec-body expression?))
+  (newref-exp (exp1 expression?))
+  (deref-exp (exp1 expression?))
+  (setref-exp (exp1 expression?) (exp2 expression?))
+  (begin-exp (fst expression?) (rest (list-of expression?))))
 
 ; Grammar, Constuct AST
 (define grammar
@@ -221,7 +290,12 @@ Expression ::= let {identifier = Expression}* in Expression
     (expression ("letrec"
                  (arbno identifier "(" (separated-list identifier ",") ")" "=" expression)
                  "in" expression)
-                letrec-exp)))
+                letrec-exp)
+    (expression ("newref" "(" expression ")") newref-exp)
+    (expression ("deref" "(" expression ")") deref-exp)
+    (expression ("setref" "(" expression "," expression ")") setref-exp)
+    (expression ("begin" expression (arbno ";" expression) "end") begin-exp)))
+
 ; Evaluator
 (define value-of
   (lambda (exp env)
@@ -342,7 +416,24 @@ Expression ::= let {identifier = Expression}* in Expression
       ;; evaluate a closure = evaluate closure under extend arguments to its env
       ;; with env contains function
       (letrec-exp (p-names b-vars p-bodies letrec-body)
-                  (value-of letrec-body (extend-env-rec p-names b-vars p-bodies env))))))
+                  (value-of letrec-body (extend-env-rec p-names b-vars p-bodies env)))
+      (newref-exp (exp1)
+                  (let ([val (value-of exp1 env)])
+                    (ref-val (newref val))))
+      (deref-exp (exp1)
+                 (let* ([val (value-of exp1 env)]
+                        [num (expval->ref val)])
+                   (deref num)))
+      (setref-exp (exp1 exp2)
+                  (let* ([val1 (value-of exp1 env)]
+                         [val2 (value-of exp2 env)]
+                         [ref (expval->ref val1)])
+                    ; DEBUG (eopl:printf "val1: ~s val2: ~s ref: ~s\n" val1 val2 ref)
+                    (setref! ref val2)))
+      (begin-exp (fst rest)
+                 (let* ([exps (cons fst rest)]
+                       [vals (map (lambda (exp) (value-of exp env)) exps)])
+                   (last vals))))))
 
 (define init-env
   (lambda ()
@@ -358,19 +449,32 @@ Expression ::= let {identifier = Expression}* in Expression
         (if (equal? (expected) (actual))
             (eopl:printf "~s test passed\n" name)
             (eopl:printf "~s test failed expected: ~s but actual: ~s\n" name e a))))))
-;; TestCase
-(define let-ast
-  (value-of-program
-   (scan&parse "let x = 30 in let x = -(x,1) y = -(x,2) in -(x,y)")))
 
-(define let*-ast
-  (value-of-program
-   (scan&parse "let x = 30 in let* x = -(x,1) y = -(x,2) in -(x,y)")))
+;; TestCase
+(define evaluate
+  (lambda (str)
+    (value-of-program
+     (scan&parse str))))
+
+(define let-ast (evaluate "let x = 30 in let x = -(x,1) y = -(x,2) in -(x,y)"))
+
+(define let*-ast (evaluate "let x = 30 in let* x = -(x,1) y = -(x,2) in -(x,y)"))
 
 (define letrec-ast
-  (value-of-program
-   (scan&parse "letrec odd(x) = if zero?(x) then 0 else (even -(x,1)) \
-                       even(x) = if zero?(x) then 1 else (odd -(x,1)) in (odd 12)")))
+  (evaluate "letrec odd(x) = if zero?(x) then 0 else (even -(x,1))
+                    even(x) = if zero?(x) then 1 else (odd -(x,1))
+             in (odd 12)"))
+
+(define counter
+  (evaluate "let g = proc()
+                      let counter = newref(0)
+                      in begin
+                           setref(counter, -(deref(counter), 1));
+                           deref(counter)
+                         end
+             in let a = (g 11)
+                in let b = (g 11)
+                   in -(a,b)"))
 
 ((assertEqual 'let) (lambda () 1) (lambda () (expval->num let-ast)))
 ((assertEqual 'let*) (lambda () 2) (lambda () (expval->num let*-ast)))
