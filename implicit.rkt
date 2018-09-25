@@ -262,7 +262,7 @@
     (expression ("+" "(" (separated-list expression ",") ")") plus-exp)
     (expression ("*" "(" (separated-list expression ",") ")") mul-exp)
     (expression ("/" "(" expression "," expression ")") div-exp)
-    (expression ("minus" "(" expression ")") minus-exp)
+    (expression ("~"  expression) minus-exp)
     (expression ("zero?" "(" expression ")") zero?-exp)
     (expression ("=" "(" expression "," expression ")") equal?-exp)
     (expression ("<" "(" expression "," expression ")") less?-exp)
@@ -466,6 +466,23 @@
                 in let b = (g 11)
                    in -(a,b)"))
 
+(define times4-A
+  (evaluate "letrec times4(x) = if zero?(x)
+                                 then 0
+                                 else -((times4 -(x,1)), ~4)
+             in (times4 3)"))
+
+(define times4-B
+  (evaluate "let times4 = 0
+             in begin
+                   set times4 = proc(x) if zero?(x)
+                                        then 0
+                                        else -((times4 -(x,1)), ~4) ;
+                   (times4 3)
+                end"))
+
+
 ((assertEqual 'let) (lambda () 1) (lambda () (expval->num let-ast)))
 ((assertEqual 'let*) (lambda () 2) (lambda () (expval->num let*-ast)))
 ((assertEqual 'letrec) (lambda () 0) (lambda () (expval->num letrec-ast)))
+((assertEqual 'times4) (lambda () times4-A) (lambda () times4-B))
