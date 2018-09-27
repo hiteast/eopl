@@ -83,13 +83,6 @@
 (define scan&parse
   (sllgen:make-string-parser scanner grammar))
 
-(define value-of-program
-  (lambda (pgm)
-    ;; infinity memory store
-    (initialize-store!)
-    (cases program pgm
-      (a-program (exp1) (value-of exp1 (init-env))))))
-
 (define repl
   (sllgen:make-rep-loop "-->"
                         value-of-program
@@ -213,7 +206,34 @@
 ; Program    ::= Expression
 ;               a-program (exp1)
 (define-datatype program program?
-  (a-program (exp1 expression?)))
+  (a-program (stmt statement?)))
+
+(define-datatype statement statement?
+  (assign-stmt (var identifier?) (exp1 expression?))
+  (print-stmt (exp1 expression?))
+  (block-stmt (stmts (list-of statement?)))
+  (if-stmt    (exp1 expression?) (stmt2 statement?) (stmt3 statement?))
+  (while-stmt (exp1 expression?) (stmt2 statement?))
+  (decl-stmt  (vars (list-of identifier?)) (stmt statement)))
+
+(define value-of-program
+  (lambda (pgm)
+    ;; infinity memory store
+    (initialize-store!)
+    (cases program pgm
+      (a-program (stmt) (value-of-stmt stmt (init-env))))))
+
+;; Stmt * Env -> Env
+(define result-of-stmt
+  (lambda (stmt env)
+    (cases statement stmt
+      (assign-stmt (var exp1) (extend-env var (newref (value-of exp1 env)) env))
+      (print-stmt (exp1) (eopl:printf "~s" (value-of exp1 env)))
+      (block-stmt (stmts) (if (null? stmts)
+                              '() ; return nothing
+                              (begin
+                                (value-of-stmt (car stmts) env)))))))
+
 
 (define-datatype expression expression?
   (const-exp (num number?))

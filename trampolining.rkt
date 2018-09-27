@@ -340,8 +340,7 @@
                     (apply-cont cont (num-val (quotient num1 num2)))))
       (zero1-cont (saved-cont)
                   (apply-cont saved-cont
-                              (bool-val)
-                              (zero? expval->num val)))
+                              (bool-val (zero? (expval->num val)))))
       (let-exp-cont (vars body saved-env saved-cont)
                      (let ([vals (expval->list val)])
                
